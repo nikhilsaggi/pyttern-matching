@@ -18,6 +18,7 @@ def unroll_types(e, pattern):
     if isinstance(pattern, Cons):
         if len(pattern) > len(e)+1:
             # pattern we are trying to apply is larger than Cons; quit
+            # (+1 because last element of valid Cons can be [])
             return False, context
 
         checks = [False]*len(pattern)
@@ -41,9 +42,27 @@ def unroll_types(e, pattern):
             checks[last] = True
 
         return all(checks), context
-    elif isinstance(pattern, tuple):
-        pass
 
+    elif isinstance(pattern, tuple):
+        if len(pattern) != len(e):
+            return False, context
+
+        checks = [False]*len(pattern)
+
+        for i in range(len(pattern)):
+            if isinstance(pattern[i], Variable) and pattern[i].get_type() == type(e[i]):
+                # element i in the pattern is a Variable and it type-matches i in e=(..., i, ...)
+                context[pattern[i].get_name()] = e[i]
+                checks[i] = True
+            elif pattern[i] == e[i] or isinstance(pattern[i], Wildcard):
+                # element i in the pattern equals i in e=(..., i, ...) or is wildcard
+                checks[i] = True
+
+        return all(checks), context
+
+    elif isinstance(pattern, Variable):
+        context[pattern.get_name()] = e
+        return True, context
     
     return False, context
 
@@ -54,17 +73,20 @@ def pattern_match(e, patterns):
 
         types_match, context = unroll_types(e, pattern)
         if e == pattern or types_match:
-            if isinstance(command, Recurse):
+            if isinstance(command, Evaluation):
                 com = command.get()
                 # replace all FUNC(...) with pattern_match(..., patterns)
                 funcs = [m.start() for m in re.finditer('FUNC\(', com)]
-                try:
-                    for func_id in funcs:
-                        id = com.find(")", func_id)
-                        com = com[:id] + ", patterns" + com[id:]
-                except ValueError:
-                    raise Exception(f"[pattern_match] invalid Recursive call syntax")
-                com = com.replace("FUNC", "pattern_match")
+                if funcs != []:
+                    # recursive call used
+                    try:
+                        for func_id in funcs[::-1]:
+                            # flip funcs so that we access indices right-to-left, so they don't get shifted right
+                            id = com.find(")", func_id)
+                            com = com[:id] + ", patterns" + com[id:]
+                    except ValueError:
+                        raise Exception("[pattern_match] invalid Recursive call syntax")
+                    com = com.replace("FUNC", "pattern_match")
 
                 # declare all variables defined in pattern
                 for var, val in context.items():
@@ -75,7 +97,8 @@ def pattern_match(e, patterns):
                 return locals()['return_val']
             else:
                 return command
-    return False
+                
+    raise Exception("[pattern_match] pattern matching is not exhaustive")
 
 ### DATA STRUCTURES ###
 
@@ -107,7 +130,7 @@ class Variable:
         if t not in SUPPORTED_TYPES:
             raise Exception(f"[Variable] type {t} not supported; please use one of {SUPPORTED_TYPES}")
         if not isinstance(name, str):
-            raise Exception(f"[Variable] n should be type str")
+            raise Exception(f"[Variable] {name} should be type str")
         self._name = name
         self._type = t
 
@@ -123,10 +146,10 @@ class Wildcard:
         pass
 
 
-class Recurse:
+class Evaluation:
     def __init__(self, s):
         if not isinstance(s, str):
-            raise Exception("[Recurse] s should be type str")
+            raise Exception(f"[Evaluation] {s} should be type str")
         self._data = s
 
     def get(self):
@@ -134,33 +157,64 @@ class Recurse:
 
 ### OPERATIONS ###
 
-def next_highest_odd(i):
+# No data structure #
+
+def next_highest_odd(n):
     """
-    Returns next highest odd number after i.
+    Returns next highest odd number after n.
 
     Args:
-        i
-            An int between 0 and 9, inclusive
-    """
-    if not isinstance(i, int):
-        raise Exception(f"[is_even] i must be int")
-    if i<0 or i>9:
-        raise Exception(f"[is_even] i must be positive single digit int")
+        n:
+            An int
 
-    return pattern_match(i, [
-        (0, i+1), (1, i+2), (2, i+1), (3, i+2), (4, i+1),
-        (5, i+2), (6, i+1), (7, i+2), (8, i+1), (9, i+2)
+    OCaml equivalent:
+        match n with
+        | i -> if i mod 2 = 0 then i+1 else i+2
+    """
+    if not isinstance(n, int):
+        raise Exception(f"[next_highest_odd] {n} must be int")
+
+    return pattern_match(n, [
+        (Variable("i", int), Evaluation("i+1 if i%2 == 0 else i+2"))
     ])
 
+
+def fib(n):
+    """
+    Returns the n-th fibonacci number.
+
+    Args:
+        n:
+            An int greater than 0
+
+    OCaml equivalent:
+        match n with
+        | 1 -> 1
+        | 2 -> 1
+        | i -> (fib i-1) + (fib i-2)
+    """
+    if not isinstance(n, int):
+        raise Exception(f"[fib] {n} must be int")
+
+    if n < 1:
+        raise Exception(f"[fib] {n} must be >=1")
+
+    return pattern_match(n, [
+        (1, 1),
+        (2, 1),
+        (Variable("i", int), Evaluation("FUNC(i-1) + FUNC(i-2)"))
+    ])
+
+# Cons #
 
 def search(l, el):
     """
     Returns True if el is in l.
 
     Args:
-        l
+        l:
             A list where each element is of type t
-        el
+        el:
             An element of type t
 
     OCaml equivalent:
@@ -174,26 +228,27 @@ def search(l, el):
     
     list_type = type(l[0])
     if not all([isinstance(e, list_type) for e in l]):
-        raise Exception(f"[search] all elements of l must be of same type")
+        raise Exception(f"[search] all elements of {l} must be of same type")
     if not isinstance(el, list_type):
-        raise Exception(f"[search] el not same type as list elements")
+        raise Exception(f"[search] {el} not same type as list elements")
 
     return pattern_match(l, [
         ([], False),
         (Cons(el, Variable("t", list)), True),
-        (Cons(Variable("h", list_type), Variable("t", list)), Recurse("FUNC(t)"))
+        (Cons(Variable("h", list_type), Variable("t", list)), Evaluation("FUNC(t)"))
     ])
+
 
 def search_two(l, el1, el2):
     """
     Returns True if el1 and el2 are found in succession in l.
 
     Args:
-        l
+        l:
             A list where each element is of type t
-        el1
+        el1:
             An element of type t
-        el2
+        el2:
             An element of type t
 
     OCaml equivalent:
@@ -207,28 +262,29 @@ def search_two(l, el1, el2):
     
     list_type = type(l[0])
     if not all([isinstance(e, list_type) for e in l]):
-        raise Exception(f"[search_two] all elements of l must be of same type")
+        raise Exception(f"[search_two] all elements of {l} must be of same type")
     if not isinstance(el1, list_type):
-        raise Exception(f"[search_two] el1 not same type as list elements")
+        raise Exception(f"[search_two] {el1} not same type as list elements")
     if not isinstance(el2, list_type):
-        raise Exception(f"[search_two] el2 not same type as list elements")
+        raise Exception(f"[search_two] {el2} not same type as list elements")
 
     return pattern_match(l, [
         ([], False),
         (Cons(el1, el2, Variable("t", list)), True),
-        (Cons(Variable("h", list_type), Variable("t", list)), Recurse("FUNC(t)"))
+        (Cons(Variable("h", list_type), Variable("t", list)), Evaluation("FUNC(t)"))
     ])
+
 
 def search_two_skip(l, el1, el2):
     """
     Returns True if el1 and el2 are found in succession, with one element between them, in l.
 
     Args:
-        l
+        l:
             A list where each element is of type t
-        el1
+        el1:
             An element of type t
-        el2
+        el2:
             An element of type t
 
     OCaml equivalent:
@@ -242,16 +298,16 @@ def search_two_skip(l, el1, el2):
     
     list_type = type(l[0])
     if not all([isinstance(e, list_type) for e in l]):
-        raise Exception(f"[search_two_skip] all elements of l must be of same type")
+        raise Exception(f"[search_two_skip] all elements of {l} must be of same type")
     if not isinstance(el1, list_type):
-        raise Exception(f"[search_two_skip] el1 not same type as list elements")
+        raise Exception(f"[search_two_skip] {el1} not same type as list elements")
     if not isinstance(el2, list_type):
-        raise Exception(f"[search_two_skip] el2 not same type as list elements")
+        raise Exception(f"[search_two_skip] {el2} not same type as list elements")
 
     return pattern_match(l, [
         ([], False),
         (Cons(el1, Wildcard(), el2, Variable("t", list)), True),
-        (Cons(Variable("h", list_type), Variable("t", list)), Recurse("FUNC(t)"))
+        (Cons(Variable("h", list_type), Variable("t", list)), Evaluation("FUNC(t)"))
     ])
 
 
@@ -260,9 +316,9 @@ def is_second(l, el):
     Returns True if el is the second element of l.
 
     Args:
-        l
+        l:
             A list where each element is of type t
-        el
+        el:
             An element of type t
 
     OCaml equivalent:
@@ -275,9 +331,9 @@ def is_second(l, el):
     
     list_type = type(l[0])
     if not all([isinstance(e, list_type) for e in l]):
-        raise Exception(f"[is_second] all elements of l must be of same type")
+        raise Exception(f"[is_second] all elements of {l} must be of same type")
     if not isinstance(el, list_type):
-        raise Exception(f"[is_second] el not same type as list elements")
+        raise Exception(f"[is_second] {el} not same type as list elements")
 
     return pattern_match(l, [
         (Cons(Variable("e1", list_type), el, Variable("t", list)), True),
@@ -290,7 +346,7 @@ def length(l):
     Returns length of l.
 
     Args:
-        l
+        l:
             A list of ints
 
     OCaml equivalent:
@@ -304,7 +360,7 @@ def length(l):
 
     return pattern_match(l, [
         ([], 0),
-        (Cons(Variable("h", list_type), Variable("t", list)), Recurse("1 + FUNC(t)"))
+        (Cons(Variable("h", list_type), Variable("t", list)), Evaluation("1 + FUNC(t)"))
     ])
 
 
@@ -313,7 +369,7 @@ def sum(l):
     Returns sum of elements of l.
 
     Args:
-        l
+        l:
             A list of ints
 
     OCaml equivalent:
@@ -325,9 +381,54 @@ def sum(l):
         return False
     
     if not all([isinstance(e, int) for e in l]):
-        raise Exception(f"[sum] all elements of l must be of type int")
+        raise Exception(f"[sum] all elements of {l} must be of type int")
 
     return pattern_match(l, [
         ([], 0),
-        (Cons(Variable("h", int), Variable("t", list)), Recurse("h + FUNC(t)"))
+        (Cons(Variable("h", int), Variable("t", list)), Evaluation("h + FUNC(t)"))
+    ])
+
+# Tuple #
+
+def sum_of_triple(t):
+    """
+    Returns sum of 3-tuple of ints. Returns None if tuple is not size 3.
+
+    Args:
+        t:
+            A tuple of ints
+    
+    OCaml equivalent:
+        match t with
+        | (x,y,z) -> Some (x+y+z)
+        | _ -> None
+    """
+    if not all([isinstance(i, int) for i in t]):
+        raise Exception(f"[sum_of_triple] {t} should contain ints")
+
+    return pattern_match(t, [
+        ((Variable("x", int), Variable("y", int), Variable("z", int)), Evaluation("x+y+z")),
+        (Wildcard(), None)
+    ])
+
+
+def is_double(t):
+    """
+    Returns True if 2nd element in the tuple is 2x the 1st element. Returns False if tuple is not size 2.
+
+    Args:
+        t:
+            A tuple of ints
+
+    OCaml equivalent:
+        match t with
+        | (x,y) -> if y=2*x then true else false
+        | _ -> false
+    """
+    if not all([isinstance(i, int) for i in t]):
+        raise Exception(f"[is_double] {t} should contain ints")
+
+    return pattern_match(t, [
+        ((Variable("x", int), Variable("y", int)), Evaluation("True if y==2*x else False")),
+        (Wildcard(), False)
     ])
