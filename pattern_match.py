@@ -2,14 +2,6 @@ import re
 
 SUPPORTED_TYPES = [int, bool, str, list]
 
-class Infix:
-    def __init__(self, function):
-        self.function = function
-    def __ror__(self, other):
-        return Infix(lambda x, self=self, other=other: self.function(other, x))
-    def __or__(self, other):
-        return self.function(other)
-
 ### PATTERN MATCH IMPLEMENTATION ###
 
 def unroll_types(e, pattern):
@@ -66,7 +58,12 @@ def unroll_types(e, pattern):
     
     return False, context
 
+
 def pattern_match(e, patterns):
+    exhaustive, msg = check_exhaustive(e, patterns)
+    if not exhaustive:
+        print(f"WARNING: This pattern matching is not exhaustive: {msg}")
+
     for pattern, command in patterns:
         if isinstance(pattern, Wildcard):
             return command
@@ -98,7 +95,61 @@ def pattern_match(e, patterns):
             else:
                 return command
                 
-    raise Exception("[pattern_match] pattern matching is not exhaustive")
+    raise Exception(f"[pattern_match] Unable to match {e} to any pattern")
+
+
+def check_exhaustive(e, patterns):
+    for p,_ in patterns:
+        if isinstance(p, Wildcard):
+            return True, ""
+    if isinstance(e, list):
+        nil_check = False
+        h_t_check = False
+        for p,_ in patterns:
+            if p == []:
+                nil_check = True
+                if e == []:
+                    # TODO: how can we infer type of empty list? for now, return True
+                    return True , ""
+            elif isinstance(p, Cons):
+                if isinstance(p.hd(), Variable) and p.hd().get_type() == type(e[0]) and p.tl()[0].get_type() == list:
+                    h_t_check = True
+
+        if not nil_check and h_t_check:
+            return False, "cases [] and h::t are not covered."
+        elif not nil_check:
+            return False, "case [] is not covered."
+        elif not h_t_check:
+            return False, "case h::t is not covered."
+        else:
+            return True, ""
+
+    elif isinstance(e, tuple):
+        # must be False because no Wildcard() case, but need to generate warning
+        unmatched_case = "case (e1"
+        i = 2
+        # iterate to find shortest tuple that doesn't match any pattern
+        while True:
+            case_covered = False
+
+            for p,_ in patterns:
+                if isinstance(p, tuple) and len(p) == i:
+                    # case is covered
+                    unmatched_case += f", e{i}"
+                    case_covered = True
+
+            if not case_covered:
+                unmatched_case += ") is not covered."
+                return False, unmatched_case
+            else:
+                i += 1
+    else:
+        for p,_ in patterns:
+            if isinstance(p, Variable) and p.get_type() == type(e):
+                return True, ""
+                
+        # not supported
+        return False, f"case {type(e).__name__} is not covered."
 
 ### DATA STRUCTURES ###
 
@@ -431,4 +482,70 @@ def is_double(t):
     return pattern_match(t, [
         ((Variable("x", int), Variable("y", int)), Evaluation("True if y==2*x else False")),
         (Wildcard(), False)
+    ])
+
+# Non-exhaustive patterns #
+
+def bad_list(l):
+    """
+    Example of a non-exhaustive list pattern match. (should produce a warning)
+
+    Args:
+        l:
+            A list
+
+    OCaml equivalent:
+        match l with
+        | [] -> false
+        | e1::e2::t -> true
+    """
+    return pattern_match(l, [
+        ([], False),
+        (Cons(Variable("e1", int), Variable("e2", int), Variable("t", list)), True)
+    ])
+
+
+def bad_tuple(t):
+    """
+    Example of a non-exhaustive tuple pattern match. (should produce a warning)
+
+    Args:
+        t:
+            A tuple
+
+    OCaml equivalent:
+        match t with
+        | (a,b) -> false
+        | (a,b,c) -> false
+        | (a,b,c,d) -> false
+        | (a,b,c,d,e) -> false
+    """
+    return pattern_match(t, [
+        ((Variable("a", int), Variable("b", int)), False),
+        ((Variable("a", int), Variable("b", int), Variable("c", int)), False),
+        ((Variable("a", int), Variable("b", int), Variable("c", int), Variable("d", int)), False),
+        ((Variable("a", int), Variable("b", int), Variable("c", int), Variable("d", int), Variable("e", int)), False)
+    ])
+
+
+def bad_misc(n):
+    """
+    Example of a non-exhaustive miscellaneous pattern match. (should produce a warning)
+
+    Args:
+        n:
+            An int
+
+    OCaml equivalent: 
+        match n with
+        | b -> false
+
+    **This example would not produce a warning in OCaml but does here,
+      because Variable()'s must be strongly typed.**
+    """
+    if not isinstance(n, int):
+        raise Exception(f"[bad_misc] {n} must be an int")
+
+    return pattern_match(n, [
+        (Variable("b", bool), False)
     ])

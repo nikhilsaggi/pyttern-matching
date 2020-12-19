@@ -1,20 +1,46 @@
 Implements OCaml-style pattern matching and the Cons operator in Python.  
-See OPERATIONS section in [pattern_match.py](pattern_match.py) for examples on how to write pattern matches.  
 
-
-See below for an example on how to use implemented functions:
-
+See below for examples of using the `pattern_match()` function:
+### Example 1
+#### Compute sum of a list
+OCaml code:
 ```
->>> import pattern_match
->>> pattern_match.search([8,10,5], 5)
-True
->>> pattern_match.search_two([8,10,5], 10, 5)
-True
->>> pattern_match.search([8,10,5], 1)
-False
+let sum l =
+    match l with
+    | [] -> 0
+    | h::t -> h + sum t
+```
+Python code:
+```
+def sum(l):
+    return pattern_match(l, [
+        ([], 0),
+        (Cons(Variable("h", int), Variable("t", list)), Evaluation("h + FUNC(t)"))
+    ])
 ```
 
-### Currently implemented examples
+### Example 2
+#### Check if consecutive elements `el1` and `el2` exist in list, with one in between
+OCaml code:
+```
+let search_two_skip l el1 el2 =
+    match l with
+    | [] -> false
+    | el1::_::el2::t -> true
+    | h::t -> search_two_skip t el1 el2
+```
+Python code:
+```
+def search_two_skip(l, el1, el2):
+    return pattern_match(l, [
+        ([], False),
+        (Cons(el1, Wildcard(), el2, Variable("t", list)), True),
+        (Cons(Variable("h", list_type), Variable("t", list)), Evaluation("FUNC(t)"))
+    ])
+```
+
+### Currently implemented examples 
+(see line 154 onwards in [pattern_match.py](pattern_match.py) for implementations)
 * `next_highest_odd`: obtains next highest odd number
 * `fib`: gets specified fibonacci number
 * `search`: checks if element is in list
